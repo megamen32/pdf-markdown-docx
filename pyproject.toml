@@ -1,0 +1,9 @@
+[project]
+name = "pdf-markdown-docx"
+version = "0.1.0"
+description = "PDF to Markdown and Markdown/DOCX conversion helpers."
+requires-python = ">=3.13"
+dependencies = [
+    "pdfplumber>=0.11.0",
+    "python-docx>=1.2.0",
+]
