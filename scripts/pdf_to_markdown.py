@@ -5,8 +5,9 @@ This utility is meant for official grant rules, instructions, templates, and
 presentation PDFs. It supports:
 - `auto`: choose the best extraction path per page
 - `text`: use only the embedded text layer
+- `ocr`: use OCR on rendered pages
+- `llm`: use a vision model on rendered pages
 - `text+images`: combine the text layer with a vision model when useful
-- `images`: use a vision model on rendered pages
 
 For image-only pages, the tool can fall back to OCR or an OpenAI-compatible
 vision endpoint.
@@ -49,6 +50,10 @@ def looks_like_real_text(page_text: str) -> bool:
 
 def has_image_content(page) -> bool:
     return bool(getattr(page, "images", None))
+
+
+def llm_configured(args: argparse.Namespace) -> bool:
+    return bool(get_llm_api_key(args) and get_llm_base_url(args))
 
 
 def clean_ocr_text(page_text: str) -> str:
@@ -317,11 +322,13 @@ def extract_page_text(page, input_path: Path, page_number: int, args: argparse.N
     text = page.extract_text(x_tolerance=2, y_tolerance=2) or ""
     text = normalize_text(text)
     page_has_images = has_image_content(page)
-    mode = args.mode
+    mode = "llm" if args.mode == "images" else args.mode
 
     if mode == "text":
         return text
-    if mode == "images":
+    if mode == "ocr":
+        return ocr_page(input_path, page_number)
+    if mode == "llm":
         return call_llm_markdown(
             input_path=input_path,
             page_number=page_number,
@@ -330,15 +337,16 @@ def extract_page_text(page, input_path: Path, page_number: int, args: argparse.N
         )
     if mode == "text+images":
         if looks_like_real_text(text) and page_has_images:
-            return call_llm_markdown(
-                input_path=input_path,
-                page_number=page_number,
-                page_text=text,
-                args=args,
-            )
+            if llm_configured(args):
+                return call_llm_markdown(
+                    input_path=input_path,
+                    page_number=page_number,
+                    page_text=text,
+                    args=args,
+                )
         if looks_like_real_text(text):
             return text
-        if args.llm_api_key or get_llm_api_key(args):
+        if llm_configured(args):
             return call_llm_markdown(
                 input_path=input_path,
                 page_number=page_number,
@@ -349,20 +357,17 @@ def extract_page_text(page, input_path: Path, page_number: int, args: argparse.N
 
     if looks_like_real_text(text) and not page_has_images:
         return text
-    if looks_like_real_text(text) and page_has_images and (args.llm_api_key or get_llm_api_key(args)):
-        return call_llm_markdown(
-            input_path=input_path,
-            page_number=page_number,
-            page_text=text,
-            args=args,
-        )
-    if args.llm_api_key or get_llm_api_key(args):
-        return call_llm_markdown(
-            input_path=input_path,
-            page_number=page_number,
-            page_text=text,
-            args=args,
-        )
+    if looks_like_real_text(text) and page_has_images:
+        if llm_configured(args):
+            return call_llm_markdown(
+                input_path=input_path,
+                page_number=page_number,
+                page_text=text,
+                args=args,
+            )
+        return text
+    if looks_like_real_text(text):
+        return text
     return ocr_page(input_path, page_number)
 
 
@@ -415,8 +420,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         default="auto",
-        choices=["auto", "text", "text+images", "images"],
-        help="Extraction mode: auto, text, text+images, or images.",
+        choices=["auto", "text", "ocr", "llm", "text+images", "images"],
+        help="Extraction mode: auto, text, ocr, llm, text+images, or images (alias for llm).",
     )
     parser.add_argument(
         "--llm-base-url",

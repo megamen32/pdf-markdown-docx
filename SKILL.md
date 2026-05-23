@@ -15,8 +15,10 @@ Use this skill when you need a reliable document conversion loop:
 
 - `--mode auto` for unknown PDFs
 - `--mode text` for clean text-layer PDFs
+- `--mode ocr` for scans or image-only PDFs without LLM
+- `--mode llm` for slide decks or complex pages that should be read by vision
 - `--mode text+images` for mixed PDFs with both text and visuals
-- `--mode images` for slide decks, scans, or pages that should be read by vision
+- `--mode images` as a backward-compatible alias for `llm`
 
 ## LLM-backed conversion
 
@@ -27,5 +29,6 @@ When using vision-based conversion, provide the endpoint and key through flags o
 
 Prefer `auto` unless you know the source class.
 Use `text` when the PDF already has a good embedded text layer.
-Use `images` when layout matters more than the text layer.
+Use `ocr` when the PDF is basically a scan and you want no LLM dependency.
+Use `llm` when layout, slides, or embedded visuals matter more than the text layer.
 After revising Markdown, convert it back with `scripts/markdown_to_docx.py`.
