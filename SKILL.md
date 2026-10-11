@@ -32,3 +32,11 @@ Use `text` when the PDF already has a good embedded text layer.
 Use `ocr` when the PDF is basically a scan and you want no LLM dependency.
 Use `llm` when layout, slides, or embedded visuals matter more than the text layer.
 After revising Markdown, convert it back with `scripts/markdown_to_docx.py`.
+
+## GLM Coding Plan
+
+Default vision model: `glm-5.3-flash`. For the Z.ai subscription, use
+`--llm-base-url https://api.z.ai/api/anthropic --llm-api-style anthropic`
+and provide the key through `PDF_TO_MD_LLM_API_KEY`. OpenAI-compatible endpoints
+remain supported. Truncated responses fail explicitly; increase
+`--llm-max-tokens` when needed. No credentials are bundled.

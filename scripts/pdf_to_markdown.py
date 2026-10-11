@@ -33,7 +33,7 @@ import pdfplumber
 
 TESSERACT_BIN = shutil.which("tesseract")
 PDFTOPPM_BIN = shutil.which("pdftoppm")
-DEFAULT_LLM_MODEL = "qwen3.5"
+DEFAULT_LLM_MODEL = "glm-5.3-flash"
 
 
 def normalize_text(text: str) -> str:
@@ -87,6 +87,7 @@ def clean_ocr_text(page_text: str) -> str:
 
         if letter_count < 2:
             continue
+        lines.append(line)
 
     return normalize_text("\n".join(lines))
 
@@ -213,6 +214,9 @@ def call_llm_markdown(
         "Convert this PDF page into clean Markdown.",
         "Preserve the slide/page title, section hierarchy, bullets, and short inline emphasis if obvious.",
         "Do not invent content.",
+        "For tables, preserve every row and every column header with its units and subheaders.",
+        "Expand merged cells to the rows or columns they cover. Keep genuinely blank cells blank.",
+        "Return tables as Markdown or HTML tables, never replace a table with prose or bullet points.",
         "Remove OCR noise and decorative symbols.",
         "If the page is a presentation slide, use a Markdown heading for the slide title and bullet lists for bullets.",
         "If the page contains tables, preserve them as a simple Markdown table only if the structure is clear; otherwise use short bullet points.",
@@ -248,14 +252,33 @@ def call_llm_markdown(
         "max_tokens": args.llm_max_tokens,
     }
 
+    api_style = args.llm_api_style
+    if api_style == "auto":
+        api_style = "anthropic" if "/anthropic" in base_url else "openai"
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if api_style == "anthropic":
+        user_content = payload["messages"][1]["content"]
+        image_url = user_content[1]["image_url"]["url"]
+        payload = {
+            "model": args.llm_model,
+            "max_tokens": args.llm_max_tokens,
+            "system": payload["messages"][0]["content"],
+            "messages": [{"role": "user", "content": [
+                user_content[0],
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_url.split(",", 1)[1]}},
+            ]}],
+        }
+        headers.update({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+        endpoint = base_url.rstrip("/")
+        endpoint = endpoint if endpoint.endswith("/v1") else endpoint + "/v1"
+        endpoint += "/messages"
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+        endpoint = f"{base_url.rstrip('/')}/chat/completions"
     request = urllib.request.Request(
-        url=f"{base_url.rstrip('/')}/chat/completions",
+        url=endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
 
@@ -270,9 +293,19 @@ def call_llm_markdown(
     except urllib.error.URLError as exc:
         raise SystemExit(f"LLM request failed for page {page_number}: {exc}") from exc
 
+    if api_style == "anthropic":
+        if body.get("stop_reason") == "max_tokens":
+            raise SystemExit(f"LLM output truncated for page {page_number}; increase --llm-max-tokens")
+        content = "\n".join(block.get("text", "") for block in body.get("content", []) if block.get("type") == "text")
+        if not content.strip():
+            raise SystemExit(f"LLM returned empty content for page {page_number}")
+        return normalize_text(content)
+
     choices = body.get("choices") or []
     if not choices:
         raise SystemExit(f"LLM returned no choices for page {page_number}")
+    if choices[0].get("finish_reason") == "length":
+        raise SystemExit(f"LLM output truncated for page {page_number}; increase --llm-max-tokens")
     message = choices[0].get("message") or {}
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
@@ -423,6 +456,8 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "text", "ocr", "llm", "text+images", "images"],
         help="Extraction mode: auto, text, ocr, llm, text+images, or images (alias for llm).",
     )
+    parser.add_argument("--llm-api-style", choices=["auto", "openai", "anthropic"],
+                        default=os.environ.get("PDF_TO_MD_LLM_API_STYLE", "auto"))
     parser.add_argument(
         "--llm-base-url",
         default=None,
@@ -440,7 +475,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--llm-max-tokens",
         type=int,
-        default=1200,
+        default=16384,
         help="Maximum tokens for the LLM response.",
     )
     parser.add_argument(
@@ -485,6 +520,8 @@ def main() -> int:
     try:
         markdown = convert_pdf(input_path, args)
     except Exception:
+        if args.mode in {"llm", "images", "text+images"}:
+            raise
         markdown = convert_pdf_legacy(input_path)
     output_path.write_text(markdown, encoding="utf-8")
     print(output_path)
